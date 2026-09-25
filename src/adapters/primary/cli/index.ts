@@ -1,0 +1,263 @@
+import { createRequire } from 'node:module';
+import { Command, Option } from 'commander';
+import { GhostwireError, toGhostwireError } from '../../../core/domain/errors.js';
+import type { ConnectOptions, ServeOptions, SessionInfo } from '../../../core/domain/session/config.js';
+import type { LogLevel } from '../../../core/ports/outbound/logger.js';
+
+export interface ServeInvocation {
+  options: ServeOptions;
+  logLevel: LogLevel;
+}
+
+export interface ConnectInvocation {
+  options: ConnectOptions;
+  logLevel: LogLevel;
+}
+
+export interface CliHandlers {
+  serve(invocation: ServeInvocation, signal: AbortSignal): Promise<void>;
+  connect(invocation: ConnectInvocation, signal: AbortSignal): Promise<void>;
+  fetchInfo(invocation: ConnectInvocation): Promise<SessionInfo>;
+}
+
+const require = createRequire(import.meta.url);
+const pkg = require('../../../../package.json') as { version?: string };
+
+const HANDSHAKE_TIMEOUT_MS = 10_000;
+const LOG_LEVELS: LogLevel[] = ['debug', 'info', 'warn', 'error'];
+
+interface ServeFlags {
+  address: string;
+  token: string | undefined;
+  fps: number;
+  maxWidth: number;
+  compress: 'deflate' | 'none';
+  tlsCert: string | undefined;
+  tlsKey: string | undefined;
+  pingInterval: number;
+  pingTimeout: number;
+  logLevel: LogLevel;
+}
+
+interface ConnectFlags {
+  token: string | undefined;
+  name: string;
+  tls: boolean;
+  caCert: string | undefined;
+  insecure: boolean;
+  pingInterval: number;
+  pingTimeout: number;
+  logLevel: LogLevel;
+}
+
+export function createCli(handlers: CliHandlers, signal: AbortSignal): Command {
+  const program = new Command();
+  program
+    .name('ghostwire')
+    .description('ghostwire — remote desktop over a custom RDP-like protocol (GWRD)')
+    .version(pkg.version ?? '0.0.0')
+    .showHelpAfterError();
+
+  program
+    .command('serve')
+    .description('share this machine screen over TCP')
+    .option('-a, --address <address>', 'listen address (host:port)', '0.0.0.0:5901')
+    .addOption(new Option('-t, --token <token>', 'auth token').env('GHOSTWIRE_TOKEN').default(''))
+    .option('--fps <n>', 'capture frame rate (1-60)', numberParser, 10)
+    .option('--max-width <n>', 'max frame width in pixels, 0 = native', numberParser, 1600)
+    .addOption(
+      new Option('--compress <mode>', 'frame compression')
+        .choices(['deflate', 'none'] as const)
+        .default('deflate'),
+    )
+    .option('--tls-cert <path>', 'TLS certificate path (PEM, requires --tls-key)')
+    .option('--tls-key <path>', 'TLS private key path (PEM, requires --tls-cert)')
+    .option('--ping-interval <ms>', 'keepalive ping interval', numberParser, 5000)
+    .option('--ping-timeout <ms>', 'keepalive timeout', numberParser, 15_000)
+    .addOption(
+      new Option('--log-level <level>', 'log verbosity')
+        .choices(LOG_LEVELS)
+        .default('info'),
+    )
+    .action(async (flags: ServeFlags) => {
+      validateServeFlags(flags);
+      const options: ServeOptions = {
+        address: flags.address,
+        token: flags.token ?? '',
+        fps: flags.fps,
+        maxWidth: flags.maxWidth,
+        compress: flags.compress,
+        handshakeTimeoutMs: HANDSHAKE_TIMEOUT_MS,
+        pingIntervalMs: flags.pingInterval,
+        pingTimeoutMs: flags.pingTimeout,
+        ...(flags.tlsCert && flags.tlsKey
+          ? { tls: { certPath: flags.tlsCert, keyPath: flags.tlsKey } }
+          : {}),
+      };
+      await handlers.serve({ options, logLevel: flags.logLevel }, signal);
+    });
+
+  program
+    .command('connect')
+    .description('view and control a remote ghostwire server in this terminal')
+    .argument('<address>', 'server address (host:port)')
+    .addOption(new Option('-t, --token <token>', 'auth token').env('GHOSTWIRE_TOKEN').default(''))
+    .option('-n, --name <name>', 'client name shown to the server', 'ghostwire-cli')
+    .option('--tls', 'use TLS for the connection')
+    .option('--ca-cert <path>', 'custom CA certificate (PEM)')
+    .option('--insecure', 'skip server certificate verification')
+    .option('--ping-interval <ms>', 'keepalive ping interval', numberParser, 5000)
+    .option('--ping-timeout <ms>', 'keepalive timeout', numberParser, 15_000)
+    .addOption(
+      new Option('--log-level <level>', 'log verbosity')
+        .choices(LOG_LEVELS)
+        .default('info'),
+    )
+    .action(async (address: string, flags: ConnectFlags) => {
+      const invocation = buildConnectInvocation(address, flags);
+      await handlers.connect(invocation, signal);
+    });
+
+  program
+    .command('info')
+    .description('query a remote server and print its session info')
+    .argument('<address>', 'server address (host:port)')
+    .addOption(new Option('-t, --token <token>', 'auth token').env('GHOSTWIRE_TOKEN').default(''))
+    .option('--tls', 'use TLS for the connection')
+    .option('--ca-cert <path>', 'custom CA certificate (PEM)')
+    .option('--insecure', 'skip server certificate verification')
+    .option('--json', 'print raw JSON')
+    .addOption(
+      new Option('--log-level <level>', 'log verbosity')
+        .choices(LOG_LEVELS)
+        .default('info'),
+    )
+    .action(async (address: string, flags: ConnectFlags & { json?: boolean }) => {
+      const invocation = buildConnectInvocation(address, {
+        ...flags,
+        name: 'ghostwire-info',
+        pingInterval: 5000,
+        pingTimeout: 15_000,
+      });
+      const info = await handlers.fetchInfo(invocation);
+      if (flags.json) {
+        process.stdout.write(`${JSON.stringify(info, null, 2)}\n`);
+        return;
+      }
+      const lines = [
+        `address: ${invocation.options.address}`,
+        `screen:  ${info.screen.width}x${info.screen.height}`,
+        `fps:     ${info.fps}`,
+        `server:  ${info.serverVersion}`,
+      ];
+      process.stdout.write(`${lines.join('\n')}\n`);
+    });
+
+  return program;
+}
+
+export async function runCli(argv: string[], handlers: CliHandlers): Promise<number> {
+  const controller = new AbortController();
+  const program = createCli(handlers, controller.signal);
+
+  let interrupts = 0;
+  const onSignal = (): void => {
+    interrupts += 1;
+    if (interrupts > 1) process.exit(130);
+    controller.abort();
+  };
+  process.on('SIGINT', onSignal);
+  process.on('SIGTERM', onSignal);
+
+  try {
+    await program.parseAsync(argv);
+    return 0;
+  } catch (err) {
+    const error = toGhostwireError(err);
+    process.stderr.write(`error: ${error.message}\n`);
+    return exitCodeFor(error);
+  } finally {
+    process.off('SIGINT', onSignal);
+    process.off('SIGTERM', onSignal);
+  }
+}
+
+function buildConnectInvocation(address: string, flags: ConnectFlags): ConnectInvocation {
+  validateConnectFlags(address, flags);
+  const options: ConnectOptions = {
+    address,
+    token: flags.token ?? '',
+    clientName: flags.name,
+    handshakeTimeoutMs: HANDSHAKE_TIMEOUT_MS,
+    pingIntervalMs: flags.pingInterval,
+    pingTimeoutMs: flags.pingTimeout,
+    ...(flags.tls
+      ? { tls: { ...(flags.caCert ? { caCertPath: flags.caCert } : {}), ...(flags.insecure ? { insecure: true } : {}) } }
+      : {}),
+  };
+  return { options, logLevel: flags.logLevel };
+}
+
+function numberParser(value: string): number {
+  return Number(value);
+}
+
+function validateServeFlags(flags: ServeFlags): void {
+  if (!flags.token) {
+    throw new GhostwireError('config', 'serve: token is required (--token or GHOSTWIRE_TOKEN)');
+  }
+  requireInteger(flags.fps, 1, 60, 'serve: --fps');
+  requireInteger(flags.maxWidth, 0, 16_384, 'serve: --max-width');
+  requireInteger(flags.pingInterval, 100, 600_000, 'serve: --ping-interval');
+  requireInteger(flags.pingTimeout, 100, 600_000, 'serve: --ping-timeout');
+  if (flags.pingTimeout < flags.pingInterval) {
+    throw new GhostwireError('config', 'serve: --ping-timeout must be >= --ping-interval');
+  }
+  if ((flags.tlsCert && !flags.tlsKey) || (!flags.tlsCert && flags.tlsKey)) {
+    throw new GhostwireError('config', 'serve: --tls-cert and --tls-key must be used together');
+  }
+}
+
+function validateConnectFlags(address: string, flags: ConnectFlags): void {
+  if (!address || !address.includes(':')) {
+    throw new GhostwireError('config', 'connect: address must be host:port');
+  }
+  if (!flags.token) {
+    throw new GhostwireError('config', 'connect: token is required (--token or GHOSTWIRE_TOKEN)');
+  }
+  if (!flags.name) {
+    throw new GhostwireError('config', 'connect: --name must not be empty');
+  }
+  requireInteger(flags.pingInterval, 100, 600_000, 'connect: --ping-interval');
+  requireInteger(flags.pingTimeout, 100, 600_000, 'connect: --ping-timeout');
+  if (flags.pingTimeout < flags.pingInterval) {
+    throw new GhostwireError('config', 'connect: --ping-timeout must be >= --ping-interval');
+  }
+  if (flags.caCert && !flags.tls) {
+    throw new GhostwireError('config', 'connect: --ca-cert requires --tls');
+  }
+  if (flags.insecure && !flags.tls) {
+    throw new GhostwireError('config', 'connect: --insecure requires --tls');
+  }
+}
+
+function requireInteger(value: number, min: number, max: number, label: string): void {
+  if (!Number.isInteger(value) || value < min || value > max) {
+    throw new GhostwireError('config', `${label} must be an integer between ${min} and ${max}`);
+  }
+}
+
+function exitCodeFor(error: GhostwireError): number {
+  switch (error.code) {
+    case 'config':
+      return 2;
+    case 'auth':
+      return 3;
+    case 'timeout':
+      return 4;
+    case 'busy':
+      return 5;
+    default:
+      return 1;
+  }
+}
