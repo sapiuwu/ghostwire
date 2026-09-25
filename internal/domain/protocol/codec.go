@@ -196,7 +196,7 @@ func (d *MessageDecoder) take(count int) []byte {
 
 func (d *MessageDecoder) compact() {
 	for len(d.chunks) > 0 && d.head >= len(d.chunks[0]) {
+		d.head -= len(d.chunks[0])
 		d.chunks = d.chunks[1:]
-		d.head = 0
 	}
 }

@@ -58,11 +58,11 @@ func (q *AsyncQueue[T]) End(err error) {
 }
 
 func (q *AsyncQueue[T]) Next() (T, bool) {
-	select {
-	case item := <-q.ch:
+	if len(q.ch) > 0 {
+		item := <-q.ch
 		return item, true
-	case <-q.done:
-		var zero T
-		return zero, false
 	}
+	<-q.done
+	var zero T
+	return zero, false
 }
