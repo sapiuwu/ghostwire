@@ -14,6 +14,8 @@ Perintah CLI:
 - `ghostwire serve` — sajikan layar mesin ini (capture GDI + input injection SendInput)
 - `ghostwire connect <host:port>` — lihat & kendalikan server dari terminal ini
 - `ghostwire info <host:port>` — tanya info sesi server (screen/fps/version), ada `--json`
+- `ghostwire token generate` — buat token auth acak (crypto/rand) dan simpan ke file token;
+  serve/connect/info memakai file itu sebagai fallback token
 
 ## 2. Status saat ini
 
@@ -41,6 +43,8 @@ Perintah CLI:
 - Bahasa komunikasi user: **Indonesia**.
 - Error codes domain (`internal/domain/errors.go`): `protocol, version, auth, busy, timeout, closed, transport, unsupported, config, internal`. Exit code CLI: config→2, auth→3, timeout→4, busy→5, lainnya→1.
 - Token env fallback: `GHOSTWIRE_TOKEN` (via `os.Getenv`).
+- Urutan sumber token CLI: `--token` → `GHOSTWIRE_TOKEN` → file token
+  (`--token-file`, default `~/.ghostwire/token`, dibuat `ghostwire token generate`).
 
 ## 4. Peta direktori (semua file)
 
@@ -66,9 +70,11 @@ internal/port/
 internal/service/
   server.go                             # ServerService (handshake/auth, capture loop, keepalive, backpressure)
   client.go                             # ClientService (connect, inbox pump, queue drop-4, stats rtt/fps)
+  session_e2e_test.go                   # e2e handshake/auth/busy lewat TCP sungguhan (butuh mockCapturer)
 internal/util/asyncqueue.go             # AsyncQueue generic (channel-based)
 internal/adapter/
-  cli/cli.go                            # cobra CLI: serve/connect/info + validation
+  cli/cli.go                            # cobra CLI: serve/connect/info/token + validation
+  cli/token.go                          # GenerateToken/SaveTokenFile/LoadTokenFile + resolveToken
   terminal/input_parser.go              # ParseTerminalInput, KeyFromChar, MapCellToScreen
   terminal/ansi_renderer.go             # AnsiRenderer diff-based, status line
   terminal/viewer.go                    # TerminalViewer (raw mode, flush ESC 50ms, Ctrl+Q, resize)
@@ -145,6 +151,16 @@ Adapter primary TIDAK boleh di-import oleh core/services (hanya sebaliknya).
   DC/bitmap dibuat sekali (`Start`), `StretchBlt` downscale ke `maxWidth`, **2 buffer piksel bergantian**.
   Non-Windows = stub返回 `ErrUnsupported`.
 - **TLS**: stdlib `crypto/tls` (wraps SChannel di Windows).
+- **Transport (bug fix, wajib dipertahankan)**: `tcpListener.acceptLoop` harus memanggil
+  `go conn.readLoop()` SETELAH `connCb` mendaftarkan callback (dulu server tak pernah
+  membaca socket → handshake selalu timeout). `tcpConn.OnClose` menyimpan **slice**
+  callback (dulu saling menimpa → sesi tak pernah tertutup → koneksi berikutnya
+  dianggap busy). Path busy server menulis `Error{busy}` lalu menutup via
+  `time.AfterFunc` (bukan `Close()` langsung — close dengan data belum terbaca
+  memicu RST dan payload busy hilang di jalan).
+- **Handshake client (bug fix)**: `waitForInbox` menunggu lalu **pop satu pesan dalam
+  satu call**; jangan return saat inbox terisi tanpa pop (dulu: spin tanpa batas),
+  dan jangan `mu.Lock()` ganda (dulu: self-deadlock).
 - **Input FFI**: manual syscall `user32.dll` `SendInput`, `INPUT` struct 28 bytes (compile-time size assertion belum, TODO).
 
 ## 8. Pekerjaan tersisa (urutan pengerjaan)

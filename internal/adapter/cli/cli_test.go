@@ -10,6 +10,7 @@ import (
 )
 
 func TestServeRequiresToken(t *testing.T) {
+	setupTokenEnv(t)
 	handlers := cli.CliHandlers{
 		Serve: func(opts port.ServeOptions, ctx context.Context) error {
 			return nil
@@ -48,6 +49,7 @@ func TestServeFpsOutOfRange(t *testing.T) {
 }
 
 func TestConnectRequiresToken(t *testing.T) {
+	setupTokenEnv(t)
 	handlers := cli.CliHandlers{
 		Connect: func(opts port.ConnectOptions, ctx context.Context) error {
 			return nil

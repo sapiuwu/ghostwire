@@ -19,14 +19,21 @@ Remote desktop CLI untuk Windows. Menggunakan protokol custom bernama **GWRD** o
 # Build
 go build -o ghostwire.exe ./cmd/ghostwire
 
-# Terminal 1: Start server (share layar)
-./ghostwire.exe serve --token mysecret --address 0.0.0.0:5901
+# Generate auth token (disimpan di ~/.ghostwire/token)
+./ghostwire.exe token generate
 
-# Terminal 2: Connect (lihat & kontrol)
-./ghostwire.exe connect 127.0.0.1:5901 --token mysecret
+# Terminal 1: Start server (share layar) — token dibaca dari file token
+./ghostwire.exe serve --address 0.0.0.0:5901
+
+# Terminal 2: Connect (lihat & kontrol) — file token juga dibaca di mesin ini
+./ghostwire.exe connect 127.0.0.1:5901
 
 # Terminal 2: Query info saja (tanpa viewer)
-./ghostwire.exe info 127.0.0.1:5901 --token mysecret
+./ghostwire.exe info 127.0.0.1:5901
+
+# Token juga bisa di-override secara explicit (mis. dari device lain)
+./ghostwire.exe serve --token mysecret
+./ghostwire.exe connect 127.0.0.1:5901 --token mysecret
 ```
 
 ## Commands
@@ -42,7 +49,8 @@ ghostwire serve [flags]
 | Flag | Default | Deskripsi |
 |---|---|---|
 | `-a, --address` | `0.0.0.0:5901` | Listen address (host:port) |
-| `-t, --token` | _(required)_ | Auth token (env: `GHOSTWIRE_TOKEN`) |
+| `-t, --token` | _(required)_ | Auth token (env: `GHOSTWIRE_TOKEN`; fallback: file token) |
+| `--token-file` | `~/.ghostwire/token` | Path file token |
 | `--fps` | `10` | Capture frame rate (1-60) |
 | `--max-width` | `1600` | Max frame width dalam pixels (0 = native) |
 | `--compress` | `deflate` | Frame compression (`deflate` atau `none`) |
@@ -57,6 +65,7 @@ ghostwire serve [flags]
 ghostwire serve --token secret123 --fps 15 --max-width 1280
 ghostwire serve --token secret123 --tls-cert cert.pem --tls-key key.pem
 GHOSTWIRE_TOKEN=secret123 ghostwire serve
+ghostwire serve                      # token diambil dari file token
 ```
 
 ### `ghostwire connect <host:port>`
@@ -69,7 +78,8 @@ ghostwire connect <host:port> [flags]
 
 | Flag | Default | Deskripsi |
 |---|---|---|
-| `-t, --token` | _(required)_ | Auth token (env: `GHOSTWIRE_TOKEN`) |
+| `-t, --token` | _(required)_ | Auth token (env: `GHOSTWIRE_TOKEN`; fallback: file token) |
+| `--token-file` | `~/.ghostwire/token` | Path file token |
 | `-n, --name` | `ghostwire-cli` | Client name yang ditampilkan ke server |
 | `--tls` | `false` | Gunakan TLS untuk koneksi |
 | `--ca-cert` | - | Custom CA certificate (PEM) |
@@ -92,7 +102,8 @@ ghostwire info <host:port> [flags]
 
 | Flag | Default | Deskripsi |
 |---|---|---|
-| `-t, --token` | _(required)_ | Auth token (env: `GHOSTWIRE_TOKEN`) |
+| `-t, --token` | _(required)_ | Auth token (env: `GHOSTWIRE_TOKEN`; fallback: file token) |
+| `--token-file` | `~/.ghostwire/token` | Path file token |
 | `--tls` | `false` | Gunakan TLS |
 | `--ca-cert` | - | Custom CA certificate (PEM) |
 | `--insecure` | `false` | Skip certificate verification |
@@ -105,6 +116,39 @@ screen:  1920x1080
 fps:     10
 server:  0.1.0
 ```
+
+### `ghostwire token generate`
+
+Membuat token auth baru (32 byte acak dari `crypto/rand`, encoding base64url) dan
+menyimpannya ke file token. `serve`, `connect`, dan `info` membaca file ini secara
+otomatis bila `--token` / `GHOSTWIRE_TOKEN` tidak di-set.
+
+```bash
+ghostwire token generate [flags]
+```
+
+| Flag | Default | Deskripsi |
+|---|---|---|
+| `--path` | `~/.ghostwire/token` | Path file token |
+| `--force` | `false` | Timpa file token yang sudah ada |
+
+**Output:**
+```
+# stdout (token-nya sendiri, aman di-pipe)
+xQ7pLmV2aB9cD4fG1hJ8kN3sT6uW0yZ5rC2eI4oP7aS
+
+# stderr (info lokasi file)
+token: saved to C:\Users\you\.ghostwire\token
+```
+
+**Urutan sumber token** (berlaku untuk `serve` / `connect` / `info`):
+
+1. Flag `--token`
+2. Env `GHOSTWIRE_TOKEN`
+3. File token (`--token-file`, default `~/.ghostwire/token`)
+
+Untuk **device lain**: salin token hasil `generate` (stdout) lalu gunakan lewat
+`--token` atau `GHOSTWIRE_TOKEN` pada perangkat tersebut.
 
 ## Architecture
 
@@ -141,7 +185,8 @@ internal/
     client.go                          # ClientService (connect, inbox pump, session)
   util/asyncqueue.go                   # AsyncQueue (generic, channel-based)
   adapter/
-    cli/cli.go                         # Cobra CLI (serve/connect/info)
+    cli/cli.go                         # Cobra CLI (serve/connect/info/token)
+    cli/token.go                       # generate/baca file token (sumber auth)
     terminal/
       input_parser.go                  # Terminal input parser (CSI, SS3, SGR mouse, etc.)
       ansi_renderer.go                 # Diff-based ANSI renderer
@@ -304,7 +349,12 @@ go run ./cmd/ghostwire connect 127.0.0.1:5901 --token test
 
 | Variable | Description |
 |---|---|
-| `GHOSTWIRE_TOKEN` | Default auth token (fallback for `--token`) |
+| `GHOSTWIRE_TOKEN` | Default auth token (fallback untuk `--token`) |
+
+Selain env var, file token default `~/.ghostwire/token`
+(Windows: `%USERPROFILE%\.ghostwire\token`) juga dibaca sebagai fallback terakhir
+oleh `serve` / `connect` / `info`. Lokasi bisa diganti dengan flag `--token-file`
+atau saat generate dengan `--path`.
 
 ## Exit Codes
 
@@ -338,6 +388,8 @@ Stdlib only (no external deps):
 
 - Token di-hash dengan SHA-256 sebelum dibandingkan
 - Perbandingan token menggunakan `crypto/subtle.ConstantTimeCompare` (timing-safe)
+- Token dibuat dari `crypto/rand` (32 byte), bukan PRNG yang bisa ditebak
+- File token ditulis dengan permission `0600` di direktori `~/.ghostwire` (`0700`)
 - TLS opsional, bisa self-signed dengan `--insecure`
 - Token tidak pernah di-log
 

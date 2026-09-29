@@ -121,26 +121,25 @@ func (c *ClientService) Connect(ctx context.Context, opts port.ConnectOptions) (
 		mu.Lock()
 		if len(inbox) > 0 {
 			mu.Unlock()
-			return nil
-		}
-		remaining := time.Until(handshakeDeadline)
-		if remaining <= 0 {
+		} else {
+			remaining := time.Until(handshakeDeadline)
+			if remaining <= 0 {
+				mu.Unlock()
+				return domain.NewError(domain.ErrTimeout, "timed out waiting for server response")
+			}
+			done := make(chan struct{})
+			notify = func() {
+				close(done)
+			}
 			mu.Unlock()
-			return domain.NewError(domain.ErrTimeout, "timed out waiting for server response")
-		}
-		done := make(chan struct{})
-		mu.Lock()
-		notify = func() {
-			close(done)
-		}
-		mu.Unlock()
 
-		select {
-		case <-done:
-		case <-time.After(remaining):
-			mu.Lock()
-			notify = func() {}
-			mu.Unlock()
+			select {
+			case <-done:
+			case <-time.After(remaining):
+				mu.Lock()
+				notify = func() {}
+				mu.Unlock()
+			}
 		}
 
 		mu.Lock()
@@ -390,13 +389,13 @@ func (c *ClientService) Connect(ctx context.Context, opts port.ConnectOptions) (
 	}()
 
 	session := &clientSession{
-		info:    &info,
-		stats:   stats,
-		queue:   queue,
-		conn:    conn,
-		closed:  &closed,
-		mu:      &mu,
-		finish:  finish,
+		info:     &info,
+		stats:    stats,
+		queue:    queue,
+		conn:     conn,
+		closed:   &closed,
+		mu:       &mu,
+		finish:   finish,
 		closeErr: &closeError,
 	}
 	return session, nil

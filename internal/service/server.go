@@ -16,37 +16,37 @@ import (
 )
 
 type ServerDeps struct {
-	Transport port.TransportPort
-	Capturer  port.ScreenCapturerPort
-	Injector  port.InputInjectorPort
+	Transport  port.TransportPort
+	Capturer   port.ScreenCapturerPort
+	Injector   port.InputInjectorPort
 	Compressor port.CompressorPort
-	Logger    port.Logger
+	Logger     port.Logger
 }
 
 type ServerService struct {
-	deps    ServerDeps
-	host    *hostState
-	mu      sync.Mutex
+	deps     ServerDeps
+	host     *hostState
+	mu       sync.Mutex
 	counters port.ServerStats
 }
 
 type hostState struct {
-	opts          port.ServeOptions
-	listener      port.Listener
-	active        *activeSession
-	closed        bool
-	captureTimer  *time.Timer
+	opts         port.ServeOptions
+	listener     port.Listener
+	active       *activeSession
+	closed       bool
+	captureTimer *time.Timer
 }
 
 type activeSession struct {
-	conn            port.Conn
-	decoder         protocol.MessageDecoder
-	authenticated   bool
-	closed          bool
-	lastSeenAt      time.Time
-	handshakeTimer  *time.Timer
-	keepaliveTimer  *time.Ticker
-	paused          bool
+	conn           port.Conn
+	decoder        protocol.MessageDecoder
+	authenticated  bool
+	closed         bool
+	lastSeenAt     time.Time
+	handshakeTimer *time.Timer
+	keepaliveTimer *time.Ticker
+	paused         bool
 }
 
 func NewServerService(deps ServerDeps) *ServerService {
@@ -101,7 +101,7 @@ func (s *ServerService) Serve(opts port.ServeOptions, ctx context.Context) error
 	s.deps.Logger.Info("server listening",
 		map[string]any{"address": listener.Address(),
 			"screen": fmt.Sprintf("%dx%d", screenBounds.Width, screenBounds.Height),
-			"fps": opts.Fps})
+			"fps":    opts.Fps})
 
 	var lastPixels []byte
 	var lastBounds screen.ScreenSize = screenBounds
@@ -214,7 +214,9 @@ func (s *ServerService) acceptConnection(conn port.Conn, host *hostState, lastPi
 	if host.active != nil && !host.active.closed {
 		conn.Write(protocol.EncodeMessage(protocol.MsgError,
 			protocol.EncodeError(protocol.ErrorPayload{Code: "busy", Message: "another viewer is already connected"}), 0))
-		conn.Close()
+		time.AfterFunc(time.Duration(host.opts.HandshakeTimeoutMs)*time.Millisecond, func() {
+			conn.Close()
+		})
 		s.deps.Logger.Warn("rejected viewer: session busy")
 		s.mu.Unlock()
 		return

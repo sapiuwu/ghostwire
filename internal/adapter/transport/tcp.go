@@ -48,11 +48,11 @@ type tcpConn struct {
 	mu            sync.Mutex
 	dataCb        func([]byte)
 	errorCb       func(error)
-	closeCb       func()
+	closeCbs      []func()
 	drainCb       func()
 }
 
-func (c *tcpConn) ID() string          { return c.id }
+func (c *tcpConn) ID() string            { return c.id }
 func (c *tcpConn) RemoteAddress() string { return c.remoteAddress }
 
 func (c *tcpConn) Write(chunk []byte) bool {
@@ -65,10 +65,14 @@ func (c *tcpConn) Write(chunk []byte) bool {
 	return err == nil
 }
 
-func (c *tcpConn) OnData(cb func([]byte))  { c.mu.Lock(); c.dataCb = cb; c.mu.Unlock() }
-func (c *tcpConn) OnError(cb func(error))  { c.mu.Lock(); c.errorCb = cb; c.mu.Unlock() }
-func (c *tcpConn) OnClose(cb func())       { c.mu.Lock(); c.closeCb = cb; c.mu.Unlock() }
-func (c *tcpConn) OnDrain(cb func())       { c.mu.Lock(); c.drainCb = cb; c.mu.Unlock() }
+func (c *tcpConn) OnData(cb func([]byte)) { c.mu.Lock(); c.dataCb = cb; c.mu.Unlock() }
+func (c *tcpConn) OnError(cb func(error)) { c.mu.Lock(); c.errorCb = cb; c.mu.Unlock() }
+func (c *tcpConn) OnClose(cb func()) {
+	c.mu.Lock()
+	c.closeCbs = append(c.closeCbs, cb)
+	c.mu.Unlock()
+}
+func (c *tcpConn) OnDrain(cb func()) { c.mu.Lock(); c.drainCb = cb; c.mu.Unlock() }
 
 func (c *tcpConn) Close() {
 	c.mu.Lock()
@@ -98,13 +102,13 @@ func (c *tcpConn) readLoop() {
 		if err != nil {
 			c.mu.Lock()
 			errCb := c.errorCb
-			closeCb := c.closeCb
+			closeCbs := c.closeCbs
 			c.mu.Unlock()
 			if err != io.EOF && errCb != nil {
 				errCb(err)
 			}
-			if closeCb != nil {
-				closeCb()
+			for _, cb := range closeCbs {
+				cb()
 			}
 			return
 		}
@@ -112,19 +116,19 @@ func (c *tcpConn) readLoop() {
 }
 
 type tcpListener struct {
-	address      string
-	server       net.Listener
-	connCb       func(port.Conn)
-	errorCb      func(error)
-	conns        sync.Map
-	closed       bool
-	mu           sync.Mutex
+	address string
+	server  net.Listener
+	connCb  func(port.Conn)
+	errorCb func(error)
+	conns   sync.Map
+	closed  bool
+	mu      sync.Mutex
 }
 
 func (l *tcpListener) Address() string { return l.address }
 
 func (l *tcpListener) OnConnection(cb func(port.Conn)) { l.connCb = cb }
-func (l *tcpListener) OnError(cb func(error))           { l.errorCb = cb }
+func (l *tcpListener) OnError(cb func(error))          { l.errorCb = cb }
 
 func (l *tcpListener) Close() error {
 	l.mu.Lock()
@@ -155,19 +159,13 @@ func (l *tcpListener) acceptLoop() {
 		}
 		conn := newTCPConn(socket)
 		l.conns.Store(conn.id, conn)
-		go func() {
-			<-func() chan struct{} {
-				ch := make(chan struct{})
-				conn.OnClose(func() {
-					l.conns.Delete(conn.id)
-					close(ch)
-				})
-				return ch
-			}()
-		}()
+		conn.OnClose(func() {
+			l.conns.Delete(conn.id)
+		})
 		if l.connCb != nil {
 			l.connCb(conn)
 		}
+		go conn.readLoop()
 	}
 }
 

@@ -11,8 +11,8 @@ import (
 )
 
 type CliHandlers struct {
-	Serve    func(opts port.ServeOptions, ctx context.Context) error
-	Connect  func(opts port.ConnectOptions, ctx context.Context) error
+	Serve     func(opts port.ServeOptions, ctx context.Context) error
+	Connect   func(opts port.ConnectOptions, ctx context.Context) error
 	FetchInfo func(opts port.ConnectOptions) (port.SessionInfo, error)
 }
 
@@ -20,13 +20,13 @@ const handshakeTimeoutMs = 10000
 
 func CreateCli(handlers CliHandlers, ctx context.Context, cancel context.CancelFunc) *cobra.Command {
 	root := &cobra.Command{
-		Use:   "ghostwire",
-		Short: "remote desktop over a custom RDP-like protocol (GWRD)",
+		Use:     "ghostwire",
+		Short:   "remote desktop over a custom RDP-like protocol (GWRD)",
 		Version: "0.1.0",
 	}
 
 	// serve command
-	var serveAddr, serveToken string
+	var serveAddr, serveToken, serveTokenFile string
 	var serveFps, serveMaxWidth int
 	var serveCompress string
 	var serveTlsCert, serveTlsKey string
@@ -37,15 +37,17 @@ func CreateCli(handlers CliHandlers, ctx context.Context, cancel context.CancelF
 		Use:   "serve",
 		Short: "share this machine screen over TCP",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if serveToken == "" {
-				serveToken = os.Getenv("GHOSTWIRE_TOKEN")
-			}
-			if err := validateServe(serveToken, serveFps, serveMaxWidth, servePingInterval, servePingTimeout, serveTlsCert, serveTlsKey); err != nil {
+			token, tokenSource, err := resolveToken(serveToken, serveTokenFile)
+			if err != nil {
 				return err
 			}
+			if err := validateServe(token, serveFps, serveMaxWidth, servePingInterval, servePingTimeout, serveTlsCert, serveTlsKey); err != nil {
+				return err
+			}
+			printTokenSource(cmd, tokenSource)
 			opts := port.ServeOptions{
 				Address:            serveAddr,
-				Token:              serveToken,
+				Token:              token,
 				Fps:                serveFps,
 				MaxWidth:           serveMaxWidth,
 				Compress:           serveCompress,
@@ -60,7 +62,8 @@ func CreateCli(handlers CliHandlers, ctx context.Context, cancel context.CancelF
 		},
 	}
 	serveCmd.Flags().StringVarP(&serveAddr, "address", "a", "0.0.0.0:5901", "listen address (host:port)")
-	serveCmd.Flags().StringVarP(&serveToken, "token", "t", "", "auth token (env: GHOSTWIRE_TOKEN)")
+	serveCmd.Flags().StringVarP(&serveToken, "token", "t", "", "auth token (env: GHOSTWIRE_TOKEN, fallback: token file)")
+	serveCmd.Flags().StringVar(&serveTokenFile, "token-file", "", "auth token file (default ~/.ghostwire/token)")
 	serveCmd.Flags().IntVar(&serveFps, "fps", 10, "capture frame rate (1-60)")
 	serveCmd.Flags().IntVar(&serveMaxWidth, "max-width", 1600, "max frame width in pixels, 0 = native")
 	serveCmd.Flags().StringVar(&serveCompress, "compress", "deflate", "frame compression (deflate|none)")
@@ -71,7 +74,7 @@ func CreateCli(handlers CliHandlers, ctx context.Context, cancel context.CancelF
 	serveCmd.Flags().StringVar(&serveLogLevel, "log-level", "info", "log verbosity (debug|info|warn|error)")
 
 	// connect command
-	var connectAddr, connectToken, connectName string
+	var connectAddr, connectToken, connectTokenFile, connectName string
 	var connectTls bool
 	var connectCaCert string
 	var connectInsecure bool
@@ -84,15 +87,17 @@ func CreateCli(handlers CliHandlers, ctx context.Context, cancel context.CancelF
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			connectAddr = args[0]
-			if connectToken == "" {
-				connectToken = os.Getenv("GHOSTWIRE_TOKEN")
-			}
-			if err := validateConnect(connectAddr, connectToken, connectName, connectPingInterval, connectPingTimeout, connectTls, connectCaCert, connectInsecure); err != nil {
+			token, tokenSource, err := resolveToken(connectToken, connectTokenFile)
+			if err != nil {
 				return err
 			}
+			if err := validateConnect(connectAddr, token, connectName, connectPingInterval, connectPingTimeout, connectTls, connectCaCert, connectInsecure); err != nil {
+				return err
+			}
+			printTokenSource(cmd, tokenSource)
 			opts := port.ConnectOptions{
 				Address:            connectAddr,
-				Token:              connectToken,
+				Token:              token,
 				ClientName:         connectName,
 				HandshakeTimeoutMs: handshakeTimeoutMs,
 				PingIntervalMs:     connectPingInterval,
@@ -107,7 +112,8 @@ func CreateCli(handlers CliHandlers, ctx context.Context, cancel context.CancelF
 			return handlers.Connect(opts, ctx)
 		},
 	}
-	connectCmd.Flags().StringVarP(&connectToken, "token", "t", "", "auth token (env: GHOSTWIRE_TOKEN)")
+	connectCmd.Flags().StringVarP(&connectToken, "token", "t", "", "auth token (env: GHOSTWIRE_TOKEN, fallback: token file)")
+	connectCmd.Flags().StringVar(&connectTokenFile, "token-file", "", "auth token file (default ~/.ghostwire/token)")
 	connectCmd.Flags().StringVarP(&connectName, "name", "n", "ghostwire-cli", "client name shown to the server")
 	connectCmd.Flags().BoolVar(&connectTls, "tls", false, "use TLS for the connection")
 	connectCmd.Flags().StringVar(&connectCaCert, "ca-cert", "", "custom CA certificate (PEM)")
@@ -117,7 +123,7 @@ func CreateCli(handlers CliHandlers, ctx context.Context, cancel context.CancelF
 	connectCmd.Flags().StringVar(&connectLogLevel, "log-level", "info", "log verbosity (debug|info|warn|error)")
 
 	// info command
-	var infoAddr, infoToken string
+	var infoAddr, infoToken, infoTokenFile string
 	var infoTls bool
 	var infoCaCert string
 	var infoInsecure bool
@@ -130,15 +136,17 @@ func CreateCli(handlers CliHandlers, ctx context.Context, cancel context.CancelF
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			infoAddr = args[0]
-			if infoToken == "" {
-				infoToken = os.Getenv("GHOSTWIRE_TOKEN")
-			}
-			if err := validateConnect(infoAddr, infoToken, "ghostwire-info", 5000, 15000, infoTls, infoCaCert, infoInsecure); err != nil {
+			token, tokenSource, err := resolveToken(infoToken, infoTokenFile)
+			if err != nil {
 				return err
 			}
+			if err := validateConnect(infoAddr, token, "ghostwire-info", 5000, 15000, infoTls, infoCaCert, infoInsecure); err != nil {
+				return err
+			}
+			printTokenSource(cmd, tokenSource)
 			opts := port.ConnectOptions{
 				Address:            infoAddr,
-				Token:              infoToken,
+				Token:              token,
 				ClientName:         "ghostwire-info",
 				HandshakeTimeoutMs: handshakeTimeoutMs,
 				PingIntervalMs:     5000,
@@ -164,14 +172,48 @@ func CreateCli(handlers CliHandlers, ctx context.Context, cancel context.CancelF
 			return nil
 		},
 	}
-	infoCmd.Flags().StringVarP(&infoToken, "token", "t", "", "auth token (env: GHOSTWIRE_TOKEN)")
+	infoCmd.Flags().StringVarP(&infoToken, "token", "t", "", "auth token (env: GHOSTWIRE_TOKEN, fallback: token file)")
+	infoCmd.Flags().StringVar(&infoTokenFile, "token-file", "", "auth token file (default ~/.ghostwire/token)")
 	infoCmd.Flags().BoolVar(&infoTls, "tls", false, "use TLS for the connection")
 	infoCmd.Flags().StringVar(&infoCaCert, "ca-cert", "", "custom CA certificate (PEM)")
 	infoCmd.Flags().BoolVar(&infoInsecure, "insecure", false, "skip server certificate verification")
 	infoCmd.Flags().BoolVar(&infoJson, "json", false, "print raw JSON")
 	infoCmd.Flags().StringVar(&infoLogLevel, "log-level", "info", "log verbosity (debug|info|warn|error)")
 
-	root.AddCommand(serveCmd, connectCmd, infoCmd)
+	// token command
+	var tokenFile string
+	var tokenForce bool
+
+	tokenCmd := &cobra.Command{
+		Use:   "token",
+		Short: "manage the auth token file used by serve, connect and info",
+	}
+	tokenGenerateCmd := &cobra.Command{
+		Use:   "generate",
+		Short: "generate a new auth token and save it to the token file",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			path, err := resolveTokenPath(tokenFile)
+			if err != nil {
+				return err
+			}
+			token, err := GenerateToken()
+			if err != nil {
+				return err
+			}
+			if err := SaveTokenFile(path, token, tokenForce); err != nil {
+				return err
+			}
+			fmt.Fprintln(cmd.OutOrStdout(), token)
+			fmt.Fprintf(cmd.ErrOrStderr(), "token: saved to %s\n", path)
+			return nil
+		},
+	}
+	tokenGenerateCmd.Flags().StringVar(&tokenFile, "path", "", "token file path (default ~/.ghostwire/token)")
+	tokenGenerateCmd.Flags().BoolVar(&tokenForce, "force", false, "overwrite an existing token file")
+	tokenCmd.AddCommand(tokenGenerateCmd)
+
+	root.AddCommand(serveCmd, connectCmd, infoCmd, tokenCmd)
 
 	return root
 }
@@ -188,7 +230,7 @@ func RunCli(ctx context.Context, cancel context.CancelFunc, handlers CliHandlers
 
 func validateServe(token string, fps, maxWidth, pingInterval, pingTimeout int, tlsCert, tlsKey string) error {
 	if token == "" {
-		return domain.NewError(domain.ErrConfig, "serve: token is required (--token or GHOSTWIRE_TOKEN)")
+		return domain.NewError(domain.ErrConfig, "serve: token is required (--token, GHOSTWIRE_TOKEN, --token-file, or run 'ghostwire token generate')")
 	}
 	if err := requireInteger(fps, 1, 60, "serve: --fps"); err != nil {
 		return err
@@ -216,7 +258,7 @@ func validateConnect(address, token, name string, pingInterval, pingTimeout int,
 		return domain.NewError(domain.ErrConfig, "connect: address must be host:port")
 	}
 	if token == "" {
-		return domain.NewError(domain.ErrConfig, "connect: token is required (--token or GHOSTWIRE_TOKEN)")
+		return domain.NewError(domain.ErrConfig, "connect: token is required (--token, GHOSTWIRE_TOKEN, or --token-file)")
 	}
 	if name == "" {
 		return domain.NewError(domain.ErrConfig, "connect: --name must not be empty")
