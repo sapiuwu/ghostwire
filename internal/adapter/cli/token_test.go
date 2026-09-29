@@ -15,19 +15,17 @@ import (
 
 func setupTokenEnv(t *testing.T) {
 	t.Helper()
-	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-	t.Setenv("USERPROFILE", dir)
+	t.Chdir(t.TempDir())
 	t.Setenv("GHOSTWIRE_TOKEN", "")
 }
 
 func defaultTokenFile(t *testing.T) string {
 	t.Helper()
-	home, err := os.UserHomeDir()
+	wd, err := os.Getwd()
 	if err != nil {
-		t.Fatalf("UserHomeDir: %v", err)
+		t.Fatalf("Getwd: %v", err)
 	}
-	return filepath.Join(home, ".ghostwire", "token")
+	return filepath.Join(wd, "ghostwire.token")
 }
 
 func runCli(t *testing.T, handlers cli.CliHandlers, args ...string) (error, *bytes.Buffer, *bytes.Buffer) {

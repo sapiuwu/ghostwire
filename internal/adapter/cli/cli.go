@@ -63,7 +63,7 @@ func CreateCli(handlers CliHandlers, ctx context.Context, cancel context.CancelF
 	}
 	serveCmd.Flags().StringVarP(&serveAddr, "address", "a", "0.0.0.0:5901", "listen address (host:port)")
 	serveCmd.Flags().StringVarP(&serveToken, "token", "t", "", "auth token (env: GHOSTWIRE_TOKEN, fallback: token file)")
-	serveCmd.Flags().StringVar(&serveTokenFile, "token-file", "", "auth token file (default ~/.ghostwire/token)")
+	serveCmd.Flags().StringVar(&serveTokenFile, "token-file", "", "auth token file (default ghostwire.token)")
 	serveCmd.Flags().IntVar(&serveFps, "fps", 10, "capture frame rate (1-60)")
 	serveCmd.Flags().IntVar(&serveMaxWidth, "max-width", 1600, "max frame width in pixels, 0 = native")
 	serveCmd.Flags().StringVar(&serveCompress, "compress", "deflate", "frame compression (deflate|none)")
@@ -113,7 +113,7 @@ func CreateCli(handlers CliHandlers, ctx context.Context, cancel context.CancelF
 		},
 	}
 	connectCmd.Flags().StringVarP(&connectToken, "token", "t", "", "auth token (env: GHOSTWIRE_TOKEN, fallback: token file)")
-	connectCmd.Flags().StringVar(&connectTokenFile, "token-file", "", "auth token file (default ~/.ghostwire/token)")
+	connectCmd.Flags().StringVar(&connectTokenFile, "token-file", "", "auth token file (default ghostwire.token)")
 	connectCmd.Flags().StringVarP(&connectName, "name", "n", "ghostwire-cli", "client name shown to the server")
 	connectCmd.Flags().BoolVar(&connectTls, "tls", false, "use TLS for the connection")
 	connectCmd.Flags().StringVar(&connectCaCert, "ca-cert", "", "custom CA certificate (PEM)")
@@ -173,7 +173,7 @@ func CreateCli(handlers CliHandlers, ctx context.Context, cancel context.CancelF
 		},
 	}
 	infoCmd.Flags().StringVarP(&infoToken, "token", "t", "", "auth token (env: GHOSTWIRE_TOKEN, fallback: token file)")
-	infoCmd.Flags().StringVar(&infoTokenFile, "token-file", "", "auth token file (default ~/.ghostwire/token)")
+	infoCmd.Flags().StringVar(&infoTokenFile, "token-file", "", "auth token file (default ghostwire.token)")
 	infoCmd.Flags().BoolVar(&infoTls, "tls", false, "use TLS for the connection")
 	infoCmd.Flags().StringVar(&infoCaCert, "ca-cert", "", "custom CA certificate (PEM)")
 	infoCmd.Flags().BoolVar(&infoInsecure, "insecure", false, "skip server certificate verification")
@@ -193,10 +193,7 @@ func CreateCli(handlers CliHandlers, ctx context.Context, cancel context.CancelF
 		Short: "generate a new auth token and save it to the token file",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			path, err := resolveTokenPath(tokenFile)
-			if err != nil {
-				return err
-			}
+			path := resolveTokenPath(tokenFile)
 			token, err := GenerateToken()
 			if err != nil {
 				return err
@@ -209,7 +206,7 @@ func CreateCli(handlers CliHandlers, ctx context.Context, cancel context.CancelF
 			return nil
 		},
 	}
-	tokenGenerateCmd.Flags().StringVar(&tokenFile, "path", "", "token file path (default ~/.ghostwire/token)")
+	tokenGenerateCmd.Flags().StringVar(&tokenFile, "path", "", "token file path (default ghostwire.token in current directory)")
 	tokenGenerateCmd.Flags().BoolVar(&tokenForce, "force", false, "overwrite an existing token file")
 	tokenCmd.AddCommand(tokenGenerateCmd)
 

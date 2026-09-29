@@ -29,3 +29,6 @@ vendor/
 # OS
 .DS_Store
 Thumbs.db
+
+# Auth token file
+ghostwire.token

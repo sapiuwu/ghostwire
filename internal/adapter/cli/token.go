@@ -14,17 +14,13 @@ import (
 
 const tokenEntropyBytes = 32
 
-func DefaultTokenPath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", domain.WrapError(err, domain.ErrConfig, "token: cannot resolve home directory")
-	}
-	return filepath.Join(home, ".ghostwire", "token"), nil
+func DefaultTokenPath() string {
+	return "ghostwire.token"
 }
 
-func resolveTokenPath(explicit string) (string, error) {
+func resolveTokenPath(explicit string) string {
 	if explicit != "" {
-		return explicit, nil
+		return explicit
 	}
 	return DefaultTokenPath()
 }
@@ -48,8 +44,10 @@ func SaveTokenFile(path, token string, force bool) error {
 		}
 	}
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return domain.WrapError(err, domain.ErrConfig, "token: cannot create directory "+dir)
+	if dir != "." && dir != "" {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return domain.WrapError(err, domain.ErrConfig, "token: cannot create directory "+dir)
+		}
 	}
 	if err := os.WriteFile(path, []byte(token+"\n"), 0o600); err != nil {
 		return domain.WrapError(err, domain.ErrConfig, "token: cannot write "+path)
@@ -78,10 +76,7 @@ func resolveToken(explicit, tokenFile string) (string, string, error) {
 	if env := os.Getenv("GHOSTWIRE_TOKEN"); env != "" {
 		return env, "", nil
 	}
-	path, err := resolveTokenPath(tokenFile)
-	if err != nil {
-		return "", "", nil
-	}
+	path := resolveTokenPath(tokenFile)
 	token, err := LoadTokenFile(path)
 	if err != nil {
 		return "", "", err

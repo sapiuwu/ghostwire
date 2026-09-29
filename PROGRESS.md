@@ -44,7 +44,7 @@ Perintah CLI:
 - Error codes domain (`internal/domain/errors.go`): `protocol, version, auth, busy, timeout, closed, transport, unsupported, config, internal`. Exit code CLI: config→2, auth→3, timeout→4, busy→5, lainnya→1.
 - Token env fallback: `GHOSTWIRE_TOKEN` (via `os.Getenv`).
 - Urutan sumber token CLI: `--token` → `GHOSTWIRE_TOKEN` → file token
-  (`--token-file`, default `~/.ghostwire/token`, dibuat `ghostwire token generate`).
+  (`--token-file`, default `ghostwire.token` di direktori kerja, dibuat `ghostwire token generate`).
 
 ## 4. Peta direktori (semua file)
 
